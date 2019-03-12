@@ -6,14 +6,13 @@ import android.app.AlertDialog;
 import android.app.Dialog;
 import android.content.Context;
 import android.content.DialogInterface;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
-import android.graphics.Canvas;
-import android.graphics.Color;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.ImageFormat;
 import android.graphics.Matrix;
-import android.graphics.Paint;
-import android.graphics.PixelFormat;
 import android.graphics.Point;
 import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
@@ -30,8 +29,10 @@ import android.hardware.camera2.params.StreamConfigurationMap;
 import android.media.Image;
 import android.media.ImageReader;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.Handler;
 import android.os.HandlerThread;
+import android.support.annotation.MainThread;
 import android.support.annotation.NonNull;
 import android.support.v4.app.ActivityCompat;
 import android.support.v4.app.DialogFragment;
@@ -42,14 +43,13 @@ import android.util.Size;
 import android.util.SparseIntArray;
 import android.view.LayoutInflater;
 import android.view.Surface;
-import android.view.SurfaceHolder;
-import android.view.SurfaceView;
 import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.LinearLayout;
 import android.widget.Toast;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -225,6 +225,11 @@ public class Camera2BasicFragment extends Fragment
      */
     private File mFile;
 
+    LinearLayout linearLayout;
+    Bitmap croppedImage;
+    Bitmap capturedImage;
+    Boolean cameraOn;
+
     /**
      * This a callback object for the {@link ImageReader}. "onImageAvailable" will be called when a
      * still image is ready to be saved.
@@ -235,6 +240,15 @@ public class Camera2BasicFragment extends Fragment
         @Override
         public void onImageAvailable(ImageReader reader) {
             mBackgroundHandler.post(new ImageSaver(reader.acquireNextImage(), mFile));
+            cameraOn=false;
+            getActivity().runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    setUpCameraOutputs(mTextureView.getWidth(), mTextureView.getHeight());
+                }
+            });
+            closeCameraDevice();
+            startActivity(new Intent(getActivity(), DisplayImage.class).putExtra("IMAGE", mFile.getPath()));
         }
 
     };
@@ -339,6 +353,11 @@ public class Camera2BasicFragment extends Fragment
 
     };
 
+//    static final String appDirectoryName = "PaperSmart";
+//    File imagePath = new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM)+
+//            File.separator + appDirectoryName + File.separator);
+
+
     /**
      * Shows a {@link Toast} on the UI thread.
      *
@@ -381,7 +400,8 @@ public class Camera2BasicFragment extends Fragment
         List<Size> notBigEnough = new ArrayList<>();
         int w = aspectRatio.getWidth();
         int h = aspectRatio.getHeight();
-        for (Size option : choices) {
+        for (Size option : choices)
+        {
             if (option.getWidth() <= maxWidth && option.getHeight() <= maxHeight &&
                     option.getHeight() == option.getWidth() * h / w) {
                 if (option.getWidth() >= textureViewWidth &&
@@ -413,39 +433,8 @@ public class Camera2BasicFragment extends Fragment
     public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
         View view = inflater.inflate(R.layout.fragment_camera2_basic, container, false);
 
-        LinearLayout linearLayout = view.findViewById(R.id.surface);
-        linearLayout.addView(new Rectangle(getActivity()));
-//        SurfaceView surfaceView = view.findViewById(R.id.surfaceView);
-//        surfaceView.setZOrderOnTop(true);
-//        SurfaceHolder mHolder = surfaceView.getHolder();
-//        mHolder.setFormat(PixelFormat.TRANSPARENT);
-//        mHolder.addCallback(new SurfaceHolder.Callback() {
-//            @Override
-//            public void surfaceCreated(SurfaceHolder holder) {
-//                Canvas canvas = holder.lockCanvas();
-//                if (canvas == null) {
-//                    Log.e(TAG, "Cannot draw onto the canvas as it's null");
-//                } else {
-//                    Paint myPaint = new Paint();
-//                    myPaint.setColor(Color.rgb(100, 20, 50));
-//                    myPaint.setStrokeWidth(10);
-//                    myPaint.setStyle(Paint.Style.STROKE);
-//                    canvas.drawRect(100, 100, 200, 200, myPaint);
-//
-//                    holder.unlockCanvasAndPost(canvas);
-//                }
-//            }
-//
-//            @Override
-//            public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
-//
-//            }
-//
-//            @Override
-//            public void surfaceDestroyed(SurfaceHolder holder) {
-//
-//            }
-//        });
+        linearLayout = view.findViewById(R.id.surface);
+        cameraOn=true;
 
         return view;
     }
@@ -460,7 +449,8 @@ public class Camera2BasicFragment extends Fragment
     @Override
     public void onActivityCreated(Bundle savedInstanceState) {
         super.onActivityCreated(savedInstanceState);
-        mFile = new File(getActivity().getExternalFilesDir(null), "pic.jpg");
+
+        mFile = new File(getActivity().getExternalFilesDir(null), "cropped.jpg");
     }
 
     @Override
@@ -539,7 +529,7 @@ public class Camera2BasicFragment extends Fragment
                         Arrays.asList(map.getOutputSizes(ImageFormat.JPEG)),
                         new CompareSizesByArea());
                 mImageReader = ImageReader.newInstance(largest.getWidth(), largest.getHeight(),
-                        ImageFormat.JPEG, /*maxImages*/2);
+                        ImageFormat.JPEG, /*maxImages*/1);
                 mImageReader.setOnImageAvailableListener(
                         mOnImageAvailableListener, mBackgroundHandler);
 
@@ -604,6 +594,10 @@ public class Camera2BasicFragment extends Fragment
                     mTextureView.setAspectRatio(
                             mPreviewSize.getHeight(), mPreviewSize.getWidth());
                 }
+
+                // Add rectangle to the view
+                Rectangle rectangle = new Rectangle(getActivity(), cameraOn, mPreviewSize.getHeight(), mPreviewSize.getWidth());
+                linearLayout.addView(rectangle);
 
                 // Check if the flash is supported.
                 Boolean available = characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE);
@@ -699,7 +693,8 @@ public class Camera2BasicFragment extends Fragment
      * Creates a new {@link CameraCaptureSession} for camera preview.
      */
     private void createCameraPreviewSession() {
-        try {
+        try
+        {
             SurfaceTexture texture = mTextureView.getSurfaceTexture();
             assert texture != null;
 
@@ -808,6 +803,9 @@ public class Camera2BasicFragment extends Fragment
             mCaptureSession.capture(mPreviewRequestBuilder.build(), mCaptureCallback,
                     mBackgroundHandler);
         } catch (CameraAccessException e) {
+            e.printStackTrace();
+        }
+        catch (NullPointerException e) {
             e.printStackTrace();
         }
     }
@@ -940,7 +938,7 @@ public class Camera2BasicFragment extends Fragment
     /**
      * Saves a JPEG {@link Image} into the specified {@link File}.
      */
-    private static class ImageSaver implements Runnable {
+    private class ImageSaver implements Runnable {
 
         /**
          * The JPEG image
@@ -958,27 +956,82 @@ public class Camera2BasicFragment extends Fragment
 
         @Override
         public void run() {
+            System.gc();
             ByteBuffer buffer = mImage.getPlanes()[0].getBuffer();
             byte[] bytes = new byte[buffer.remaining()];
             buffer.get(bytes);
+            capturedImage = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
+
+            // Rectangle is drawn by dividing the preview in 8 dimensions and the rectangle starts
+            // on 2nd dimension and ends on 7th dimension so take 6 for dividing the width and height
+            int left = capturedImage.getWidth() / 8;
+            int top = capturedImage.getHeight() / 8;
+            int cropWidth = 6*left;
+            int cropHeight = 6*top;
+            Matrix rotationMatrix = new Matrix();
+            rotationMatrix.postRotate(90);
+
+            Log.e("Image dim", capturedImage.getWidth()+" "+capturedImage.getHeight());
+            Log.e("Crop dim", left+" "+top+" "+cropWidth+" "+cropHeight);
+
+            croppedImage = Bitmap.createBitmap(capturedImage, left, top, cropWidth, cropHeight, rotationMatrix, false);
+
+            //Destroy the original bitmap image
+            capturedImage.recycle();
+
             FileOutputStream output = null;
             try {
                 output = new FileOutputStream(mFile);
-                output.write(bytes);
-            } catch (IOException e) {
+                croppedImage.compress(Bitmap.CompressFormat.JPEG, 100, output);
+                output.flush();
+            }
+            catch (IOException e) {
                 e.printStackTrace();
-            } finally {
+            }
+            finally
+            {
                 mImage.close();
-                if (null != output) {
+                croppedImage.recycle();
+                if (null != output)
+                {
                     try {
                         output.close();
                     } catch (IOException e) {
                         e.printStackTrace();
                     }
                 }
+//                ContextWrapper contextWrapper = new ContextWrapper(getActivity());
+//                // path to /data/data/yourapp/app_data/imageDir
+//                File directory = contextWrapper.getDir("MyApp", Context.MODE_PRIVATE);
+                // Create imageDir
+//                File mypath = new File(getActivity().getExternalFilesDir(null), "cropped.jpg");
+//                Log.e("PATH", mypath.toString());
+//
+//                FileOutputStream fos = null;
+//                try {
+//                    fos = new FileOutputStream(mypath);
+//                    // Use the compress method on the BitMap object to write image to the OutputStream
+//                    croppedImage.compress(Bitmap.CompressFormat.JPEG, 100, fos);
+//                } catch (Exception e) {
+//                    e.printStackTrace();
+//                } finally {
+//                    try {
+//                        fos.close();
+//                    } catch (IOException e) {
+//                        e.printStackTrace();
+//                    }
+//                }
             }
         }
 
+    }
+
+    @MainThread
+    private void closeCameraDevice() {
+        if (mCameraDevice != null) {
+            mCameraDevice.close();
+            mCameraDevice = null;
+        }
     }
 
     /**
